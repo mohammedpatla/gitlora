@@ -13,10 +13,8 @@ class PacketType(IntEnum):
     GATEWAY_ACK = 1
     ACCEL_X_FEATS = 2
     ACCEL_Y_FEATS = 3
-    # these two sound types need to be consecutive
     SOUND_DATA = 4
-    SOUND_DATA2 = 5
-    TEMP_DATA = 6
+    TEMP_DATA = 5
 
     
 FLAGS_ACK = 0x80

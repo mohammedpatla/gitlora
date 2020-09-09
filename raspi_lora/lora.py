@@ -158,12 +158,12 @@ class LoRa(object):
             self._spi_write(REG_01_OP_MODE, MODE_STDBY)
             self._mode = MODE_STDBY
 
-    def send(self, sensor_id, packet_type, data):
+    def send(self, data, sensor_id, packet_type, packet_num):
         self.wait_packet_sent()
         self.set_mode_idle()
         self.wait_cad()
-        
-        header = [(sensor_id >> 24) & 0xff, (sensor_id >> 16) & 0xff, (sensor_id >> 8) & 0xff, sensor_id % 0x100, packet_type]
+
+        header = [sensor_id >> 24, sensor_id >> 16, sensor_id >> 8, sensor_id % 0x100, packet_type]
         if type(data) == int:
             data = [data]
         elif type(data) == bytes:
@@ -177,17 +177,34 @@ class LoRa(object):
         if (data == None):
             payload = header
         else:
-            payload = header + data       
+            payload = header + data
 
         self._spi_write(REG_0D_FIFO_ADDR_PTR, 0)
         self._spi_write(REG_00_FIFO, payload)
         self._spi_write(REG_22_PAYLOAD_LENGTH, len(payload))
 
         self.set_mode_tx()
-        time.sleep(0.001)
-        self.set_mode_rx()
         return True
 
+    def send_to_wait(self, data, sensor_id, packet_type, packet_num, retries=3):
+        self._last_header_id += 1
+
+        for _ in range(retries + 1):
+            self.send(data, sensor_id, packet_type, packet_num)
+            self.set_mode_rx()
+
+            # if header_to == BROADCAST_ADDRESS:  # Don't wait for acks from a broadcast message
+            #     return True
+
+            start = time.time()
+            while time.time() - start < self.retry_timeout + (self.retry_timeout * random()):
+                if self._last_payload:
+                    if self._last_payload.sensor_id == sensor_id and \
+                            self._last_payload.packet_type == PacketType.SENSOR_ACK:
+                        
+                        # We got an ACK
+                        return True
+        return False
 
     def send_ack(self, sensor_id):
         self.send(None, sensor_id, PacketType.GATEWAY_ACK.value, 0)
@@ -253,7 +270,10 @@ class LoRa(object):
                     # parse message into an array of bytes
                     data = list()
 
-                    message = bytes(packet[HEADER_LEN:]) if packet_len > HEADER_LEN else b''        
+                    message = bytes(packet[HEADER_LEN:]) if packet_len > HEADER_LEN else b''
+
+                    if self.crypto and message:
+                        message = self._decrypt(message)         
                     
                     for x in range(0, len(message) // 2):
                         lowbyte = message[x*2]
@@ -262,12 +282,10 @@ class LoRa(object):
                     
                     self.set_mode_rx()
 
-                    self._last_payload = dict()
-                    self._last_payload['data'] = data
-                    self._last_payload['sensor_id'] = sensor_id
-                    self._last_payload['packet_type'] = packet_type
-                    self._last_payload['rssi'] = rssi
-                    self._last_payload['snr'] = snr
+                    self._last_payload = namedtuple(
+                        "Payload",
+                        ['data', 'sensor_id', 'packet_type', 'rssi', 'snr']
+                    )(data, sensor_id, packet_type, rssi, snr)
 
                     # if not header_flags & FLAGS_ACK:
                     self.on_recv(self._last_payload)
@@ -277,8 +295,6 @@ class LoRa(object):
                     for x in packet:
                         print(x, end = '')
                     print("\nEnd of packet")
-                    
-                self.set_mode_rx()
 
             
 
